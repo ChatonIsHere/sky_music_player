@@ -1,2 +1,20 @@
+# Song folders
 songs/*
 !songs/Flower Dance.skysheet
+
+# Runtime data (SQLite databases, caches)
+_data/
+
+# Cloned sheet music repository
+_sheets_repo/
+
+# Imported songs
+_imported/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# User settings
+settings.json

@@ -1,54 +1,77 @@
-# Sky: COTL Automatic Music Player for PC
+# Sky Music Player
 
-Automatically play music in the game Sky: Children of the Light (*referred to as Sky*) from pre-written music sheets and mimicing key strokes. This project is made for fun, I enjoy music and Sky, using this goes against terms of service of Sky so use it at your own risk. I will not take any responsibility for anyone getting banned from using this. 
+Automatically play music in **Sky: Children of the Light** on PC by reading pre-written music sheets and simulating key strokes.
 
-## About
+> **Disclaimer:** Using automation in Sky goes against the game's Terms of Service. Use at your own risk — the authors take no responsibility for any bans or consequences.
 
-This python script takes the JSON file or skysheet file found in the [Sky Music Nightly](https://specy.github.io/skyMusic/) website and playes the song in game. After you downloaded the skysheet file or JSON file, put it into the songs folder and it should automatically detect it next time the script is ran again.
-The script will give you a 3 second window after you have selected a song to tab back into the game before it tabs back for you, sometimes this bugs out so I do recommend doing it manually, it will pause the song if you tab out of Sky so it does not take over your keyboard. The script will automatically end after a song has finished playing. You can press Ctrl + C to cancel it manually
+## Features
 
-[Here is the wiki guide to Sky's music](https://sky-children-of-the-light.fandom.com/wiki/Sky_Music_Guide)
+- **GUI** (`gui.py`) — Tkinter-based player with search, favourites, queue, duration filtering, configurable global hotkeys, and a built-in song library that syncs from GitHub.
+- **CLI** (`index.py`) — Lightweight terminal player for quick use.
+- Reads `.json`, `.skysheet`, and `.txt` song files (all JSON-formatted).
+- Auto-pauses when the Sky window loses focus and resumes when it regains it.
+- Song durations are cached in a local SQLite database so large libraries load fast.
 
+## Setup
 
-## Setup and Installation
-
-1. Download Python from their official [website](https://www.python.org)
-
-2. Clone this repo
-    (Click on the green button near the top that says "**<> Code**", then click "**Download ZIP**", then extract the zip anywhere you want)
-
-3. Install required dependencies `pip install -r requirements.txt`
-    (Right click inside the music player folder, then click "Open in Terminal". Then, copy the above code and paste it into the terminal.)
-
+1. Install [Python 3.10+](https://www.python.org/downloads/).
+2. Install [Git](https://git-scm.com/downloads) (required for the built-in song library).
+3. Clone or download this repository.
+4. Install dependencies:
+    ```
+    pip install -r requirements.txt
+    ```
 
 ## Usage
 
-1. Run Sky
+### GUI (recommended)
 
-2. Run this script
-    (Right click inside the music player folder, then click "Open in Terminal". Then, paste in `py index.py` to run the script. You will need to do this each time you want to play a song.)
+```
+py gui.py
+```
 
-3. Pull out an instrument in Sky
+1. Open Sky and pull out an instrument.
+2. Add songs to the queue (double-click or press the hotkey).
+3. Press **Play** — the player gives you a moment to switch to Sky, then starts.
 
-4. Select a song by typing in the song number and pressing Enter
+Hotkeys are fully configurable from the **⚙ Hotkeys** button in the header.
 
+### CLI
 
-## Downloading Songs
+```
+py index.py
+```
 
-1. Head over to the [Sky Nightly](https://specy.github.io/skyMusic/) website and go to the song library page
+1. Open Sky and pull out an instrument.
+2. Select a song by number in the terminal.
+3. Switch to the Sky window within the 3-second countdown.
 
-2. Search for a song of your choice and download it
+## Getting Songs
 
-<p align="center">
-    <img src="https://cdn.discordapp.com/attachments/1198460042513481738/1198461908857127013/image.png?ex=65befda1&is=65ac88a1&hm=4ed565065b998fca5cfc3d5a57fdc4c49ca2b2b63de9943ad8e0cf031752c2da&" width=500>
-</p>
+The GUI automatically downloads the community sheet collection on first launch (via Git). You can also:
 
-3. Head over to your library and find the song that you just downloaded and download it to the <mark>songs</mark> folder. (the program by default will read from the songs folder, read comment on line 131 in index.py)
+- Click **Sync** in the Library tab to pull the latest sheets.
+- Click **Import** in the Your Songs tab to add files from your computer.
+- Download sheets manually from [Sky Music Nightly](https://specy.github.io/skyMusic/) and place them in the `_imported/` folder.
 
-<p align="center">
-    <img src="https://cdn.discordapp.com/attachments/1198460042513481738/1198461805706608710/image.png?ex=65befd88&is=65ac8888&hm=5bfcc44d770d9caa47dacb5122fe2f6443061bea47af466877aee17e435d8d2b&" width=500>
-</p>
+## Project Structure
 
-4. Launch or relaunch the script and the song will be loaded into the list!
+| Path            | Description                                   |
+| --------------- | --------------------------------------------- |
+| `gui.py`        | GUI application (Tkinter)                     |
+| `index.py`      | CLI application                               |
+| `hotkeys.json`  | User hotkey configuration                     |
+| `_data/`        | SQLite databases (duration cache, favourites) |
+| `_sheets_repo/` | Auto-cloned song library (Git-managed)        |
+| `_imported/`    | User-imported song files                      |
 
-*this is a passion project, it might not work flawlessly im sorry, i just love music in sky*
+## Credits
+
+- **Original project** by [Viwyn](https://github.com/Viwyn) — [Sky-Music-Player](https://github.com/Viwyn/Sky-Music-Player)
+- **Song library** from [Ai-Vonie/Sky1984-Sheets-Collection](https://github.com/Ai-Vonie/Sky1984-Sheets-Collection)
+- **Sky Music Nightly** by [Specy](https://specy.github.io/skyMusic/) — the web tool for creating and sharing Sky music sheets
+- [Sky: Children of the Light](https://thatgamecompany.com/sky/) by thatgamecompany
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
