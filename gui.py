@@ -45,11 +45,12 @@ _SONG_EXTS = {".txt", ".json", ".skysheet"}
 # ──────────────────────────────────────────────────────────────
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH   = os.path.join(_DIR, "hotkeys.json")
 
-# Store generated data in %LOCALAPPDATA%\SkyMusicPlayer
+# Store all user data in %LOCALAPPDATA%\SkyMusicPlayer
 _APP_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "SkyMusicPlayer")
 os.makedirs(_APP_DIR, exist_ok=True)
+
+SETTINGS_PATH = os.path.join(_APP_DIR, "settings.json")
 
 _DATA_DIR     = os.path.join(_APP_DIR, "_data")
 os.makedirs(_DATA_DIR, exist_ok=True)
@@ -61,33 +62,52 @@ _REPO_SONGS_DIR = os.path.join(_REPO_DIR, "Songs")
 _IMPORTED_DIR   = os.path.join(_APP_DIR, "_imported")
 
 
-DEFAULT_HOTKEYS = {
-    "play_pause":   "f6",
-    "next_song":    "f8",
-    "prev_song":    "f7",
-    "stop":         "f9",
-    "cursor_up":    "up",
-    "cursor_down":  "down",
-    "add_to_queue": "f12",
+DEFAULT_SETTINGS = {
+    "hotkeys": {
+        "play_pause":   "f6",
+        "next_song":    "f8",
+        "prev_song":    "f7",
+        "stop":         "f9",
+        "cursor_up":    "up",
+        "cursor_down":  "down",
+        "add_to_queue": "f12",
+    },
 }
 
 
-def load_hotkeys():
-    if os.path.isfile(CONFIG_PATH):
+def _load_settings():
+    """Load the full settings dict, creating defaults if missing."""
+    if os.path.isfile(SETTINGS_PATH):
         try:
-            with open(CONFIG_PATH, "r") as f:
-                cfg = json.load(f)
-            for k, v in DEFAULT_HOTKEYS.items():
-                cfg.setdefault(k, v)
-            return cfg
+            with open(SETTINGS_PATH, "r") as f:
+                settings = json.load(f)
+            # Back-fill any new default keys
+            for section, defaults in DEFAULT_SETTINGS.items():
+                if section not in settings:
+                    settings[section] = defaults
+                elif isinstance(defaults, dict):
+                    for k, v in defaults.items():
+                        settings[section].setdefault(k, v)
+            return settings
         except Exception:
             pass
-    return DEFAULT_HOTKEYS.copy()
+    return json.loads(json.dumps(DEFAULT_SETTINGS))  # deep copy
+
+
+def _save_settings(settings):
+    """Persist the full settings dict to disk."""
+    with open(SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+
+
+def load_hotkeys():
+    return _load_settings()["hotkeys"]
 
 
 def save_hotkeys(cfg):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+    settings = _load_settings()
+    settings["hotkeys"] = cfg
+    _save_settings(settings)
 
 
 def pynput_key_to_str(key):
@@ -1395,7 +1415,7 @@ class App(tk.Tk):
                 text=f"Imported {count} file{'s' if count != 1 else ''}"
                      " \u2014 rescanning\u2026",
                 fg=COL_SUCCESS)
-            self._yoursongs_cache.rescan(imported_dir)
+            self._yoursongs_cache.rescan(_IMPORTED_DIR)
         else:
             self._status_labels["yoursongs"].config(
                 text="No new files imported", fg=COL_TEXT_DIM)
