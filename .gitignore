@@ -1,7 +1,3 @@
-# Song folders
-songs/*
-!songs/Flower Dance.skysheet
-
 # Runtime data (SQLite databases, caches)
 _data/
 
