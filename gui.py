@@ -941,6 +941,10 @@ class App(tk.Tk):
         lb.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         lb.bind("<Double-1>", lambda _, t=tab_id: self._add_to_queue(t))
+        # Suppress default arrow-key handling so the global hotkeys
+        # don't double-move the selection.
+        lb.bind("<Up>", lambda e: "break")
+        lb.bind("<Down>", lambda e: "break")
         self._listboxes[tab_id] = lb
 
         # bottom row: status label + action buttons
