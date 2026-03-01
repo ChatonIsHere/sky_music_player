@@ -22,14 +22,28 @@ jobs:
                   pip install -r requirements.txt
                   pip install pyinstaller
 
+            - name: Normalise icon (ensure multi-size Windows ICO)
+              shell: bash
+              run: |
+                  python - <<'EOF'
+                  from PIL import Image
+                  img = Image.open("icon.ico").convert("RGBA")
+                  sizes = [(16,16),(32,32),(48,48),(256,256)]
+                  frames = [img.resize(s, Image.LANCZOS) for s in sizes]
+                  frames[0].save("icon.ico", format="ICO",
+                                 append_images=frames[1:],
+                                 sizes=sizes)
+                  print("icon.ico rewritten with sizes:", sizes)
+                  EOF
+
             - name: Build executable
-              run: >
-                  pyinstaller --onefile --windowed --name SkyMusicPlayer
-                  --hidden-import pynput.keyboard._win32
-                  --hidden-import pynput.mouse._win32
-                  --icon=icon.ico
-                  --add-data "icon.ico;."
-                  gui.py
+              run: |
+                  pyinstaller --onefile --windowed --name SkyMusicPlayer `
+                    --hidden-import pynput.keyboard._win32 `
+                    --hidden-import pynput.mouse._win32 `
+                    --icon icon.ico `
+                    --add-data "icon.ico;." `
+                    gui.py
 
             - name: Upload release
               uses: softprops/action-gh-release@v2
