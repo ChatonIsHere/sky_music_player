@@ -46,14 +46,19 @@ _SONG_EXTS = {".txt", ".json", ".skysheet"}
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH   = os.path.join(_DIR, "hotkeys.json")
-_DATA_DIR     = os.path.join(_DIR, "_data")
+
+# Store generated data in %LOCALAPPDATA%\SkyMusicPlayer
+_APP_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "SkyMusicPlayer")
+os.makedirs(_APP_DIR, exist_ok=True)
+
+_DATA_DIR     = os.path.join(_APP_DIR, "_data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 
 # Repository & imported songs
 _REPO_URL       = "https://github.com/Ai-Vonie/Sky1984-Sheets-Collection.git"
-_REPO_DIR       = os.path.join(_DIR, "_sheets_repo")
+_REPO_DIR       = os.path.join(_APP_DIR, "_sheets_repo")
 _REPO_SONGS_DIR = os.path.join(_REPO_DIR, "Songs")
-_IMPORTED_DIR   = os.path.join(_DIR, "_imported")
+_IMPORTED_DIR   = os.path.join(_APP_DIR, "_imported")
 
 
 DEFAULT_HOTKEYS = {
