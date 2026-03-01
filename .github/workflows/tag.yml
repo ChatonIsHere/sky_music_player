@@ -1,0 +1,31 @@
+name: Auto Tag
+
+on:
+    push:
+        branches: [main]
+
+permissions:
+    contents: write
+
+jobs:
+    tag:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Generate date-based tag
+              id: tag
+              run: |
+                  BASE=$(date -u +%Y.%m)
+                  N=1
+                  while git rev-parse "${BASE}.${N}" >/dev/null 2>&1; do
+                    N=$((N + 1))
+                  done
+                  echo "tag=${BASE}.${N}" >> "$GITHUB_OUTPUT"
+
+            - name: Create and push tag
+              run: |
+                  git tag ${{ steps.tag.outputs.tag }}
+                  git push origin ${{ steps.tag.outputs.tag }}
