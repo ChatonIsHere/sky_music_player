@@ -24,6 +24,11 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pynput.keyboard import Controller as KbController, Key, Listener, KeyCode
 import pygetwindow
+try:
+    from PIL import Image as _PILImage, ImageTk as _ImageTk
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
 
 # ──────────────────────────────────────────────────────────────
 #  Sky instrument key mapping
@@ -47,6 +52,26 @@ _SONG_EXTS = {".txt", ".json", ".skysheet"}
 # ──────────────────────────────────────────────────────────────
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _resource_path(filename: str) -> str:
+    """Return absolute path to a bundled resource (works frozen or not)."""
+    base = getattr(sys, "_MEIPASS", _DIR)
+    return os.path.join(base, filename)
+
+
+def _load_app_icon(size: int):
+    """Return a Tkinter PhotoImage of the app icon at *size*x*size*, or None."""
+    if not _PIL_AVAILABLE:
+        return None
+    ico = _resource_path("icon.ico")
+    if not os.path.isfile(ico):
+        return None
+    try:
+        img = _PILImage.open(ico).convert("RGBA").resize(
+            (size, size), _PILImage.LANCZOS)
+        return _ImageTk.PhotoImage(img)
+    except Exception:
+        return None
 
 # Store all user data in %LOCALAPPDATA%\SkyMusicPlayer
 _APP_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "SkyMusicPlayer")
@@ -663,6 +688,162 @@ FONT_HOTKEY = ("Segoe UI Semibold", 9)
 
 
 # ──────────────────────────────────────────────────────────────
+#  Duration filter — stops in seconds (None = unbounded upper)
+# ──────────────────────────────────────────────────────────────
+
+_DUR_STOPS: list = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, None]
+
+
+def _dur_stop_label(v) -> str:
+    """Human-readable label for a stop value."""
+    if v is None:
+        return "5:00+"
+    m, s = divmod(int(v), 60)
+    return f"{m}:{s:02d}"
+
+
+def _dur_range_label(lo_idx: int, hi_idx: int) -> str:
+    """Compact label like 'All', '< 1:30', '> 1:00', '0:30 – 2:00'."""
+    lo = _DUR_STOPS[lo_idx]
+    hi = _DUR_STOPS[hi_idx]
+    if lo == 0 and hi is None:
+        return "All"
+    if lo == 0:
+        return f"< {_dur_stop_label(hi)}"
+    if hi is None:
+        return f"> {_dur_stop_label(lo)}"
+    return f"{_dur_stop_label(lo)} \u2013 {_dur_stop_label(hi)}"
+
+
+class RangeSlider(tk.Canvas):
+    """Two-handle canvas slider that snaps to _DUR_STOPS positions."""
+
+    _TRACK_H = 4
+    _HANDLE_R = 7
+    _HEIGHT = 26
+
+    def __init__(self, parent, stops: list, fmt, on_change=None, **kw):
+        bg = kw.pop("bg", COL_BG)
+        super().__init__(
+            parent,
+            width=1,
+            height=self._HEIGHT,
+            bg=bg,
+            highlightthickness=0,
+            bd=0,
+            **kw,
+        )
+        self._stops  = stops
+        self._fmt    = fmt
+        self._change = on_change
+        self._n      = len(stops) - 1          # max index
+        self._lo_idx = 0
+        self._hi_idx = self._n
+        self._drag   = None                    # "lo" | "hi"
+        self._bg     = bg
+
+        self.bind("<Configure>",      lambda _: self._redraw())
+        self.bind("<ButtonPress-1>",   self._on_press)
+        self.bind("<B1-Motion>",       self._on_drag)
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    # ── public interface ─────────────────────────────────────────
+
+    @property
+    def lo(self):
+        return self._stops[self._lo_idx]
+
+    @property
+    def hi(self):
+        return self._stops[self._hi_idx]
+
+    def reset(self):
+        self._lo_idx = 0
+        self._hi_idx = self._n
+        self._redraw()
+        if self._change:
+            self._change()
+
+    # ── geometry ─────────────────────────────────────────────────
+
+    def _width(self) -> int:
+        w = self.winfo_width()
+        return w if w > 1 else 220
+
+    def _x_for(self, idx: int) -> float:
+        pad = self._HANDLE_R + 2
+        return pad + (self._width() - 2 * pad) * idx / max(1, self._n)
+
+    def _idx_for(self, x: float) -> int:
+        pad = self._HANDLE_R + 2
+        frac = (x - pad) / max(1, self._width() - 2 * pad)
+        return max(0, min(self._n, round(frac * self._n)))
+
+    # ── drawing ──────────────────────────────────────────────────
+
+    def _redraw(self):
+        self.delete("all")
+        h   = self._HEIGHT
+        mid = h // 2
+        pad = self._HANDLE_R + 2
+        w   = self._width()
+
+        # background track
+        self.create_line(
+            pad, mid, w - pad, mid,
+            fill=COL_BTN_BG, width=self._TRACK_H, capstyle="round",
+        )
+
+        x_lo = self._x_for(self._lo_idx)
+        x_hi = self._x_for(self._hi_idx)
+
+        # active range
+        self.create_line(
+            x_lo, mid, x_hi, mid,
+            fill=COL_ACCENT, width=self._TRACK_H, capstyle="round",
+        )
+
+        # tick marks
+        for i in range(len(self._stops)):
+            tx = self._x_for(i)
+            self.create_line(tx, mid + 4, tx, mid + 7,
+                             fill=COL_TEXT_DIM, width=1)
+
+        # handles
+        r = self._HANDLE_R
+        for x, tag in [(x_lo, "lo"), (x_hi, "hi")]:
+            self.create_oval(
+                x - r, mid - r, x + r, mid + r,
+                fill=COL_ACCENT_LT, outline=COL_ACCENT,
+                width=2, tags=tag,
+            )
+
+    # ── interaction ──────────────────────────────────────────────
+
+    def _on_press(self, ev):
+        dx_lo = abs(ev.x - self._x_for(self._lo_idx))
+        dx_hi = abs(ev.x - self._x_for(self._hi_idx))
+        # prefer "hi" on tie so lo handle can still reach index 0
+        self._drag = "lo" if dx_lo < dx_hi else "hi"
+
+    def _on_drag(self, ev):
+        idx = self._idx_for(ev.x)
+        if self._drag == "lo":
+            # lo must stay at least 1 stop below hi, and never reach the None stop
+            self._lo_idx = min(idx, self._hi_idx - 1, self._n - 1)
+            self._lo_idx = max(self._lo_idx, 0)
+        else:
+            # hi must stay at least 1 stop above lo
+            self._hi_idx = max(idx, self._lo_idx + 1)
+        self._redraw()
+        if self._change:
+            self._change()
+
+    def _on_release(self, _ev):
+        self._drag = None
+
+
+# ──────────────────────────────────────────────────────────────
 #  Queue manager
 # ──────────────────────────────────────────────────────────────
 
@@ -772,6 +953,10 @@ class App(tk.Tk):
         self.minsize(540, 780)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        _ico = _resource_path("icon.ico")
+        if os.path.isfile(_ico):
+            self.wm_iconbitmap(_ico)
+
         self.engine = PlaybackEngine()
         self.hotkeys = load_hotkeys()
         self.queue = QueueManager()
@@ -785,7 +970,6 @@ class App(tk.Tk):
         self._yoursongs_cache = LibraryCache()
         self._yoursongs_cache.set_ready_callback(
             lambda: self.after(0, self._on_yoursongs_ready))
-        self._yoursongs_cache.set_progress_callback(self._on_scan_progress)
 
         self._fav_db = FavouritesDB()
 
@@ -798,7 +982,8 @@ class App(tk.Tk):
         self._search_vars: dict[str, tk.StringVar] = {}
         self._listboxes: dict[str, tk.Listbox] = {}
         self._status_labels: dict[str, tk.Label] = {}
-        self._duration_filters: dict[str, tk.StringVar] = {}
+        self._duration_sliders: dict[str, RangeSlider] = {}
+        self._duration_labels: dict[str, tk.Label] = {}
         self._debounce_ids: dict[str, str | None] = {
             "favourites": None, "library": None, "yoursongs": None}
 
@@ -816,6 +1001,8 @@ class App(tk.Tk):
         self._listener = None
         self._welcome_overlay = None
         self._complete_overlay = None
+        self._download_active = False
+        self._fav_btns: dict[str, tk.Button] = {}
 
         self._apply_theme()
         self._build_ui()
@@ -829,8 +1016,6 @@ class App(tk.Tk):
             self._show_welcome_screen()
 
     # ══════════════════════════════════════════════════════════
-    #  First-run / setup flow
-    # ══════════════════════════════════════════════════════════
 
     def _show_welcome_screen(self):
         """Show a full-window welcome overlay describing what setup will do."""
@@ -842,8 +1027,14 @@ class App(tk.Tk):
         inner = tk.Frame(ov, bg=COL_BG)
         inner.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(inner, text="\u266b", font=("Segoe UI", 48),
-                 bg=COL_BG, fg=COL_ACCENT).pack()
+        _ico = _load_app_icon(64)
+        if _ico:
+            lbl = tk.Label(inner, image=_ico, bg=COL_BG)
+            lbl.image = _ico
+            lbl.pack()
+        else:
+            tk.Label(inner, text="\u266b", font=("Segoe UI", 48),
+                     bg=COL_BG, fg=COL_ACCENT).pack()
         tk.Label(inner, text="Welcome to Sky Music Player",
                  font=("Segoe UI", 16, "bold"), bg=COL_BG,
                  fg=COL_TEXT).pack(pady=(10, 16))
@@ -1059,7 +1250,7 @@ class App(tk.Tk):
         # ── tab bar ───────────────────────────────────────────
         tab_bar = tk.Frame(songs_frm, bg=COL_BG)
         tab_bar.pack(fill="x", pady=(0, 4))
-        for tab_id, label in [("favourites", "\u2605 Favourites"),
+        for tab_id, label in [("favourites", "Favourites"),
                                ("library", "Library"),
                                ("yoursongs", "Your Songs")]:
             btn = tk.Button(
@@ -1077,13 +1268,9 @@ class App(tk.Tk):
 
         self._build_song_tab("favourites", self._tab_container)
         self._build_song_tab("library", self._tab_container,
-                             toolbar_btns=[
-                                 ("Sync", self._sync_library),
-                             ])
+                             action_btn=("Sync", self._sync_library))
         self._build_song_tab("yoursongs", self._tab_container,
-                             toolbar_btns=[
-                                 ("Import", self._import_songs),
-                             ])
+                             action_btn=("Import", self._import_songs))
         self._switch_tab("favourites")
 
         # ── queue (above transport) ───────────────────────────
@@ -1093,11 +1280,11 @@ class App(tk.Tk):
 
     # ···· per-tab song list ···································
 
-    def _build_song_tab(self, tab_id: str, parent, *, toolbar_btns=None):
+    def _build_song_tab(self, tab_id: str, parent, *, action_btn=None):
         frm = tk.Frame(parent, bg=COL_BG)
         self._tab_frames[tab_id] = frm  # don't pack — _switch_tab handles it
 
-        # toolbar row 1: search + buttons
+        # toolbar row 1: search (identical across all tabs)
         tb = tk.Frame(frm, bg=COL_BG)
         tb.pack(fill="x", pady=(0, 2))
         tk.Label(tb, text="Search:", font=FONT_SMALL,
@@ -1109,29 +1296,32 @@ class App(tk.Tk):
         tk.Entry(tb, textvariable=sv, font=FONT_SMALL,
                  bg=COL_LIST_BG, fg=COL_TEXT,
                  insertbackground=COL_TEXT, bd=0, relief="flat"
-                 ).pack(side="left", fill="x", expand=True, padx=(6, 6))
-
-        if toolbar_btns:
-            for text, cmd in reversed(toolbar_btns):
-                self._make_btn(tb, text, cmd, side="right", padx=(0, 4))
+                 ).pack(side="left", fill="x", expand=True, padx=(6, 0))
 
         # toolbar row 2: duration filter
         fb = tk.Frame(frm, bg=COL_BG)
         fb.pack(fill="x", pady=(0, 4))
         tk.Label(fb, text="Duration:", font=FONT_TINY,
-                 bg=COL_BG, fg=COL_TEXT_DIM).pack(side="left")
-        dv = tk.StringVar(value="All")
-        dv.trace_add("write",
-                     lambda *_, t=tab_id: self._on_tab_search_changed(t))
-        self._duration_filters[tab_id] = dv
-        for lbl in ["All", "<30s", ">30s", "30s-1m", "1-2m", "2-5m", "5m+"]:
-            tk.Radiobutton(
-                fb, text=lbl, variable=dv, value=lbl,
-                font=FONT_TINY, bg=COL_BG, fg=COL_TEXT_DIM,
-                selectcolor=COL_SURFACE, activebackground=COL_BG,
-                activeforeground=COL_ACCENT_LT, indicatoron=False,
-                bd=0, relief="flat", padx=6, pady=1,
-            ).pack(side="left", padx=(4, 0))
+                 bg=COL_BG, fg=COL_TEXT_DIM).pack(side="left", padx=(0, 6))
+        rng_lbl = tk.Label(fb, text=_dur_range_label(0, len(_DUR_STOPS) - 1),
+                           font=FONT_TINY, bg=COL_BG, fg=COL_TEXT_DIM,
+                           width=14, anchor="w")
+        rng_lbl.pack(side="right")
+
+        def _on_dur_change(t=tab_id):
+            sl  = self._duration_sliders[t]
+            lbl = self._duration_labels[t]
+            lbl.config(text=_dur_range_label(sl._lo_idx, sl._hi_idx))
+            self._on_tab_search_changed(t)
+
+        rs = RangeSlider(
+            fb, stops=_DUR_STOPS, fmt=_dur_stop_label,
+            on_change=_on_dur_change,
+            bg=COL_BG,
+        )
+        rs.pack(side="left", fill="x", expand=True, pady=(0, 2))
+        self._duration_sliders[tab_id] = rs
+        self._duration_labels[tab_id]  = rng_lbl
 
         # listbox
         lf = tk.Frame(frm, bg=COL_BG)
@@ -1153,26 +1343,53 @@ class App(tk.Tk):
         # don't double-move the selection.
         lb.bind("<Up>", lambda e: "break")
         lb.bind("<Down>", lambda e: "break")
+        lb.bind("<<ListboxSelect>>",
+                lambda _, t=tab_id: self._update_fav_btn_state(t))
         self._listboxes[tab_id] = lb
 
-        # bottom row: status label + action buttons
+        # bottom row — right to left: Fav/Unfav · Queue · Sync/Import · status
         bot = tk.Frame(frm, bg=COL_BG)
         bot.pack(fill="x", pady=(4, 0))
         sl = tk.Label(bot, text="", font=FONT_TINY, bg=COL_BG,
                       fg=COL_TEXT_DIM)
         sl.pack(side="left")
         self._status_labels[tab_id] = sl
+
+        # Fav/Unfav — rightmost, stored so we can grey it out
         if tab_id != "favourites":
-            self._make_btn(bot, "\u2605 Favourite",
-                           lambda t=tab_id: self._toggle_favourite(t),
-                           side="right", padx=(4, 0), small=True)
+            fav_btn = self._make_btn(bot, "Favourite",
+                                     lambda t=tab_id: self._toggle_favourite(t),
+                                     side="right", padx=(4, 0), small=True,
+                                     width=11)
         else:
-            self._make_btn(bot, "Remove \u2605",
-                           self._remove_favourite_selected,
-                           side="right", padx=(4, 0), small=True)
-        self._make_btn(bot, "+ Queue",
+            fav_btn = self._make_btn(bot, "Unfavourite",
+                                     self._remove_favourite_selected,
+                                     side="right", padx=(4, 0), small=True,
+                                     width=11)
+        fav_btn.config(state="disabled")
+        self._fav_btns[tab_id] = fav_btn
+
+        # Queue — always present, second from right
+        self._make_btn(bot, "Queue",
                        lambda t=tab_id: self._add_to_queue(t),
                        side="right", padx=(4, 0), small=True)
+
+        # Sync/Import — third from right (or invisible placeholder)
+        if action_btn:
+            self._make_btn(bot, action_btn[0], action_btn[1],
+                           side="right", padx=(4, 0), small=True)
+        else:
+            # Invisible placeholder keeps row height consistent
+            tk.Frame(bot, bg=COL_BG, width=1).pack(side="right")
+
+    def _update_fav_btn_state(self, tab_id: str):
+        """Enable/disable the Favourite button depending on list selection."""
+        btn = self._fav_btns.get(tab_id)
+        if btn is None:
+            return
+        lb = self._listboxes.get(tab_id)
+        has_sel = bool(lb and lb.curselection())
+        btn.config(state="normal" if has_sel else "disabled")
 
     # ···· transport bar ·······································
 
@@ -1266,12 +1483,17 @@ class App(tk.Tk):
                 self._hotkey_win = None
 
         win = tk.Toplevel(self)
+        win.withdraw()  # hide until positioned to prevent flash
         win.title("Settings")
         win.configure(bg=COL_BG)
         win.resizable(False, False)
         win.transient(self)
         win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
         self._hotkey_win = win
+
+        _ico = _resource_path("icon.ico")
+        if os.path.isfile(_ico):
+            win.wm_iconbitmap(_ico)
 
         # ── Song Library section ──────────────────────────────
         tk.Label(win, text="Song Library", font=FONT_BOLD,
@@ -1351,6 +1573,7 @@ class App(tk.Tk):
         x = mx + (mw - ww) // 2
         y = my + (mh - wh) // 2
         win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        win.deiconify()  # now show in the correct position
 
     def _download_library_from_settings(self):
         """Trigger a library download from the settings window."""
@@ -1367,14 +1590,17 @@ class App(tk.Tk):
     # ── helper: themed button ────────────────────────────────
 
     def _make_btn(self, parent, text, cmd, side="left", padx=0,
-                  accent=False, small=False):
+                  accent=False, small=False, width=None):
         font = FONT_TINY if small else FONT_SMALL
         bg = COL_ACCENT if accent else COL_BTN_BG
         fg = "#fff" if accent else COL_BTN_FG
-        btn = tk.Button(parent, text=text, font=font, bg=bg, fg=fg,
-                        activebackground=COL_ACCENT_LT,
-                        activeforeground="#fff",
-                        bd=0, relief="flat", padx=8, pady=3, command=cmd)
+        kw = dict(font=font, bg=bg, fg=fg,
+                  activebackground=COL_ACCENT_LT,
+                  activeforeground="#fff",
+                  bd=0, relief="flat", padx=8, pady=3, command=cmd)
+        if width is not None:
+            kw["width"] = width
+        btn = tk.Button(parent, text=text, **kw)
         btn.pack(side=side, padx=padx)
         return btn
 
@@ -1469,7 +1695,9 @@ class App(tk.Tk):
         # Download ZIP with progress
         req = urllib.request.Request(
             _ZIP_URL, headers={"User-Agent": "SkyMusicPlayer"})
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        self._download_active = True
+        try:
+          with urllib.request.urlopen(req, timeout=600) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             buf = io.BytesIO()
             downloaded = 0
@@ -1490,12 +1718,14 @@ class App(tk.Tk):
                                pct)
                 else:
                     mb = downloaded / (1024 * 1024)
-                    # Animate bar back-and-forth when size is unknown
-                    pulse = (pulse + 1) % 20
-                    ping_pong = pulse / 19 if pulse < 10 else (19 - pulse) / 9
+                    # Smooth triangle-wave animation when size is unknown
+                    pulse = (pulse + 1) % 40
+                    ping_pong = pulse / 20.0 if pulse < 20 else (40 - pulse) / 20.0
                     self.after(0, self._set_overlay_progress,
                                f"Downloading\n{mb:.1f} MB downloaded",
                                ping_pong)
+        finally:
+            self._download_active = False
 
         self.after(0, self._update_overlay_text, "Extracting\u2026")
 
@@ -1657,8 +1887,14 @@ class App(tk.Tk):
         inner = tk.Frame(ov, bg=COL_BG)
         inner.place(relx=0.5, rely=0.42, anchor="center")
 
-        tk.Label(inner, text="\u266b", font=("Segoe UI", 48),
-                 bg=COL_BG, fg=COL_ACCENT).pack()
+        _ico = _load_app_icon(64)
+        if _ico:
+            lbl = tk.Label(inner, image=_ico, bg=COL_BG)
+            lbl.image = _ico
+            lbl.pack()
+        else:
+            tk.Label(inner, text="\u266b", font=("Segoe UI", 48),
+                     bg=COL_BG, fg=COL_ACCENT).pack()
         tk.Label(inner, text=title,
                  font=("Segoe UI", 16, "bold"), bg=COL_BG,
                  fg=COL_TEXT).pack(pady=(10, 4))
@@ -1700,6 +1936,8 @@ class App(tk.Tk):
     def _update_scan_overlay(self, scanned: int, total: int):
         if self._scan_overlay is None:
             return
+        if getattr(self, '_download_active', False):
+            return  # download owns the bar right now
         pct = scanned / total if total > 0 else 0.0
         self._scan_ov_bar.place(relx=0, rely=0, relheight=1, relwidth=pct)
         self._scan_ov_pct.config(text=f"{int(pct * 100)} %")
@@ -1716,17 +1954,6 @@ class App(tk.Tk):
         self._debounce_ids[tab_id] = self.after(
             150, lambda: self._apply_tab_search(tab_id))
 
-    # duration filter ranges (min_sec, max_sec) — None = unbounded
-    _DUR_RANGES: dict[str, tuple[float | None, float | None]] = {
-        "All":   (None, None),
-        "<30s":  (None, 30),
-        ">30s":  (30, None),
-        "30s-1m": (30, 60),
-        "1-2m":  (60, 120),
-        "2-5m":  (120, 300),
-        "5m+":   (300, None),
-    }
-
     def _apply_tab_search(self, tab_id: str):
         self._debounce_ids[tab_id] = None
         query = self._search_vars[tab_id].get()
@@ -1739,16 +1966,16 @@ class App(tk.Tk):
             results = self._fav_db.search(query)
 
         # apply duration filter
-        dur_filter = self._duration_filters.get(tab_id)
-        if dur_filter:
-            lo, hi = self._DUR_RANGES.get(dur_filter.get(), (None, None))
-            if lo is not None or hi is not None:
+        rs = self._duration_sliders.get(tab_id)
+        if rs:
+            lo, hi = rs.lo or 0, rs.hi
+            if lo > 0 or hi is not None:
                 filtered = []
                 for r in results:
                     d = r[2]  # duration
                     if d is None:
                         continue
-                    if lo is not None and d < lo:
+                    if lo > 0 and d < lo:
                         continue
                     if hi is not None and d >= hi:
                         continue
@@ -1763,6 +1990,7 @@ class App(tk.Tk):
             lb.insert("end", f"  [{dur_str}]  {display}")
 
         self._update_tab_status(tab_id, query)
+        self._update_fav_btn_state(tab_id)  # selection cleared on repopulate
 
     def _update_tab_status(self, tab_id: str, query: str = ""):
         sl = self._status_labels[tab_id]
@@ -1774,8 +2002,8 @@ class App(tk.Tk):
         else:
             total = self._fav_db.count
 
-        dur_f = self._duration_filters.get(tab_id)
-        dur_active = dur_f and dur_f.get() != "All"
+        rs = self._duration_sliders.get(tab_id)
+        dur_active = rs and ((rs.lo or 0) > 0 or rs.hi is not None)
         if query.strip() or dur_active:
             sl.config(
                 text=f"{shown} match{'es' if shown != 1 else ''} (of {total})",

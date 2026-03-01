@@ -33,7 +33,7 @@ py gui.py
 2. Add songs to the queue (double-click or press the hotkey).
 3. Press **Play** — the player gives you a moment to switch to Sky, then starts.
 
-Hotkeys are fully configurable from the **⚙ Hotkeys** button in the header.
+Hotkeys are fully configurable from the **⚙ Settings** button in the header.
 
 ### CLI
 
@@ -74,6 +74,7 @@ User data is stored in `%LOCALAPPDATA%\SkyMusicPlayer\`:
 - **Original project** by [Viwyn](https://github.com/Viwyn) — [Sky-Music-Player](https://github.com/Viwyn/Sky-Music-Player)
 - **Song library** from [Ai-Vonie/Sky1984-Sheets-Collection](https://github.com/Ai-Vonie/Sky1984-Sheets-Collection)
 - **Sky Music Nightly** by [Specy](https://specy.github.io/skyMusic/) — the web tool for creating and sharing Sky music sheets
+- **App icon** by [Eucalyp](https://www.flaticon.com/authors/eucalyp) — [Google play music icons](https://www.flaticon.com/free-icons/google-play-music) from Flaticon
 - [Sky: Children of the Light](https://thatgamecompany.com/sky/) by thatgamecompany
 
 ## License
