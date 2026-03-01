@@ -70,13 +70,13 @@ _IMPORTED_DIR   = os.path.join(_APP_DIR, "_imported")
 
 DEFAULT_SETTINGS = {
     "hotkeys": {
-        "play_pause":   "f6",
-        "next_song":    "f8",
-        "prev_song":    "f7",
-        "stop":         "f9",
+        "play_pause":   "end",
+        "next_song":    "page_down",
+        "prev_song":    "delete",
+        "stop":         "left",
         "cursor_up":    "up",
         "cursor_down":  "down",
-        "add_to_queue": "f12",
+        "add_to_queue": "right",
     },
     "setup_complete": False,
     "library_downloaded": False,
