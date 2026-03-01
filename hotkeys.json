@@ -1,9 +1,0 @@
-{
-  "play_pause": "end",
-  "next_song": "page_down",
-  "prev_song": "delete",
-  "stop": "left",
-  "cursor_up": "up",
-  "cursor_down": "down",
-  "add_to_queue": "right"
-}
