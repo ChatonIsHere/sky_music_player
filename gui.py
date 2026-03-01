@@ -79,6 +79,8 @@ DEFAULT_SETTINGS = {
         "add_to_queue": "f12",
     },
     "setup_complete": False,
+    "library_downloaded": False,
+    "skip_library": False,
 }
 
 
@@ -878,7 +880,15 @@ class App(tk.Tk):
 
         tk.Label(inner, text="Requires: Internet connection",
                  font=FONT_TINY, bg=COL_BG, fg=COL_TEXT_DIM
-                 ).pack(pady=(12, 16))
+                 ).pack(pady=(12, 4))
+
+        self._skip_download_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(inner, text="Skip song library download",
+                       variable=self._skip_download_var,
+                       font=FONT_SMALL, bg=COL_BG, fg=COL_TEXT_DIM,
+                       selectcolor=COL_BG, activebackground=COL_BG,
+                       activeforeground=COL_TEXT_DIM,
+                       ).pack(pady=(0, 16))
 
         tk.Button(inner, text="Continue  \u2192", font=("Segoe UI", 11, "bold"),
                   bg=COL_ACCENT, fg="#fff",
@@ -888,19 +898,27 @@ class App(tk.Tk):
 
     def _on_welcome_continue(self):
         """User pressed Continue — tear down welcome, run first-time setup."""
+        skip_download = self._skip_download_var.get()
         if hasattr(self, "_welcome_overlay") and self._welcome_overlay:
             self._welcome_overlay.destroy()
             self._welcome_overlay = None
-        self._run_first_time_setup()
+        self._run_first_time_setup(skip_download=skip_download)
 
-    def _run_first_time_setup(self):
+    def _run_first_time_setup(self, skip_download: bool = False):
         """Execute the full setup with overlay, then show completion screen."""
         self._first_run = True
-        self._pending_scans = 2
-        self._show_scan_overlay("Setting up Library",
-                                "Preparing\u2026")
-        threading.Thread(target=self._first_time_setup_worker,
-                         daemon=True).start()
+        self._skipped_download = skip_download
+
+        if skip_download:
+            self._pending_scans = 1          # only yoursongs scan
+            self._show_scan_overlay("Setting up",
+                                    "Preparing folders\u2026")
+        else:
+            self._pending_scans = 2          # repo + yoursongs scans
+            self._show_scan_overlay("Setting up Library",
+                                    "Preparing\u2026")
+            threading.Thread(target=self._first_time_setup_worker,
+                             daemon=True).start()
 
         os.makedirs(_IMPORTED_DIR, exist_ok=True)
         self._yoursongs_cache.rescan(_IMPORTED_DIR)
@@ -912,10 +930,18 @@ class App(tk.Tk):
     def _start_auto_setup(self):
         """Returning user — silently update repo + scan, start app."""
         self._first_run = False
-        self._pending_scans = 2
-        self._show_scan_overlay("Updating Library",
-                                "Checking for updates\u2026")
-        threading.Thread(target=self._setup_repo, daemon=True).start()
+        settings = _load_settings()
+        lib_downloaded = settings.get("library_downloaded", False)
+
+        if lib_downloaded:
+            self._pending_scans = 2
+            self._show_scan_overlay("Updating Library",
+                                    "Checking for updates\u2026")
+            threading.Thread(target=self._setup_repo, daemon=True).start()
+        else:
+            # Library was never downloaded (user skipped or first install)
+            self._pending_scans = 1          # only yoursongs scan
+            self._show_scan_overlay("Loading", "Preparing\u2026")
 
         os.makedirs(_IMPORTED_DIR, exist_ok=True)
         self._yoursongs_cache.rescan(_IMPORTED_DIR)
@@ -939,12 +965,23 @@ class App(tk.Tk):
         tk.Label(inner, text="Setup Complete",
                  font=("Segoe UI", 16, "bold"), bg=COL_BG,
                  fg=COL_TEXT).pack(pady=(10, 8))
-        tk.Label(inner, text=(
-            f"Your data is stored in:\n{_APP_DIR}\n\n"
-            "The song library has been downloaded and indexed.\n"
-            "On future launches, updates will happen automatically."
-        ), font=FONT_SMALL, bg=COL_BG, fg=COL_TEXT_DIM,
-                 justify="center").pack(pady=(0, 20))
+
+        if getattr(self, '_skipped_download', False):
+            detail_text = (
+                f"Your data is stored in:\n{_APP_DIR}\n\n"
+                "Song library download was skipped.\n"
+                "You can import your own songs, or the library\n"
+                "will be downloaded automatically on next launch."
+            )
+        else:
+            detail_text = (
+                f"Your data is stored in:\n{_APP_DIR}\n\n"
+                "The song library has been downloaded and indexed.\n"
+                "On future launches, updates will happen automatically."
+            )
+
+        tk.Label(inner, text=detail_text, font=FONT_SMALL, bg=COL_BG,
+                 fg=COL_TEXT_DIM, justify="center").pack(pady=(0, 20))
 
         tk.Button(inner, text="\u25b6  Start Playing", font=("Segoe UI", 11, "bold"),
                   bg=COL_ACCENT, fg="#fff",
@@ -956,6 +993,7 @@ class App(tk.Tk):
         """User pressed Start — save flag, tear down overlay, begin app."""
         settings = _load_settings()
         settings["setup_complete"] = True
+        settings["skip_library"] = getattr(self, "_skipped_download", False)
         _save_settings(settings)
 
         if hasattr(self, "_complete_overlay") and self._complete_overlay:
@@ -1002,11 +1040,11 @@ class App(tk.Tk):
                  font=("Segoe UI", 13, "bold"),
                  bg=COL_SURFACE, fg=COL_ACCENT_LT
                  ).pack(side="left", padx=14, pady=6)
+        self._make_btn(hdr, "\u2699 Settings", self._show_settings_window,
+                        side="right", padx=(6, 6), small=True)
         self.lbl_sky = tk.Label(hdr, text="Sky: \u2026", font=FONT_TINY,
                                 bg=COL_SURFACE, fg=COL_TEXT_DIM)
-        self.lbl_sky.pack(side="right", padx=14)
-        self._make_btn(hdr, "\u2699 Hotkeys", self._show_hotkey_window,
-                        side="right", padx=(0, 6), small=True)
+        self.lbl_sky.pack(side="right", padx=(0, 8))
 
         body = tk.Frame(self, bg=COL_BG)
         body.pack(fill="both", expand=True, padx=12, pady=8)
@@ -1218,7 +1256,7 @@ class App(tk.Tk):
 
     # ···· hotkeys popup ·······································
 
-    def _show_hotkey_window(self):
+    def _show_settings_window(self):
         if self._hotkey_win is not None:
             try:
                 self._hotkey_win.lift()
@@ -1228,15 +1266,48 @@ class App(tk.Tk):
                 self._hotkey_win = None
 
         win = tk.Toplevel(self)
-        win.title("Hotkeys")
+        win.title("Settings")
         win.configure(bg=COL_BG)
         win.resizable(False, False)
         win.transient(self)
-        win.protocol("WM_DELETE_WINDOW", self._close_hotkey_window)
+        win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
         self._hotkey_win = win
 
-        tk.Label(win, text="Hotkey Configuration", font=FONT_BOLD,
-                 bg=COL_BG, fg=COL_TEXT).pack(padx=16, pady=(12, 8))
+        # ── Song Library section ──────────────────────────────
+        tk.Label(win, text="Song Library", font=FONT_BOLD,
+                 bg=COL_BG, fg=COL_TEXT).pack(padx=16, pady=(12, 4))
+
+        lib_frm = tk.Frame(win, bg=COL_BG)
+        lib_frm.pack(padx=16, fill="x")
+
+        settings = _load_settings()
+        lib_downloaded = settings.get("library_downloaded", False)
+
+        if lib_downloaded:
+            self._lib_status_lbl = tk.Label(
+                lib_frm, text="\u2714  Song library is downloaded",
+                font=FONT_SMALL, bg=COL_BG, fg=COL_SUCCESS)
+            self._lib_status_lbl.pack(anchor="w", pady=(0, 6))
+        else:
+            self._lib_status_lbl = tk.Label(
+                lib_frm, text="\u2716  Song library not downloaded",
+                font=FONT_SMALL, bg=COL_BG, fg=COL_ERR)
+            self._lib_status_lbl.pack(anchor="w", pady=(0, 2))
+            tk.Button(lib_frm, text="Download Now",
+                      font=FONT_SMALL, bg=COL_ACCENT, fg="#fff",
+                      activebackground=COL_ACCENT_LT,
+                      activeforeground="#fff",
+                      bd=0, relief="flat", padx=12, pady=3,
+                      command=self._download_library_from_settings
+                      ).pack(anchor="w", pady=(0, 6))
+
+        # ── separator ─────────────────────────────────────────
+        ttk.Separator(win, orient="horizontal").pack(fill="x", padx=16,
+                                                      pady=(4, 4))
+
+        # ── Hotkeys section ───────────────────────────────────
+        tk.Label(win, text="Hotkeys", font=FONT_BOLD,
+                 bg=COL_BG, fg=COL_TEXT).pack(padx=16, pady=(4, 8))
 
         frm = tk.Frame(win, bg=COL_BG)
         frm.pack(padx=16, pady=(0, 12))
@@ -1281,7 +1352,14 @@ class App(tk.Tk):
         y = my + (mh - wh) // 2
         win.geometry(f"+{max(0, x)}+{max(0, y)}")
 
-    def _close_hotkey_window(self):
+    def _download_library_from_settings(self):
+        """Trigger a library download from the settings window."""
+        # Close settings window first
+        self._close_settings_window()
+        # Use the existing sync flow which downloads if missing
+        self._sync_library()
+
+    def _close_settings_window(self):
         if self._hotkey_win:
             self._hotkey_win.destroy()
             self._hotkey_win = None
@@ -1396,6 +1474,7 @@ class App(tk.Tk):
             buf = io.BytesIO()
             downloaded = 0
             chunk_size = 256 * 1024  # 256 KB
+            pulse = 0  # for indeterminate animation when total is unknown
             while True:
                 chunk = resp.read(chunk_size)
                 if not chunk:
@@ -1411,8 +1490,12 @@ class App(tk.Tk):
                                pct)
                 else:
                     mb = downloaded / (1024 * 1024)
-                    self.after(0, self._update_overlay_text,
-                               f"Downloading\n{mb:.1f} MB")
+                    # Animate bar back-and-forth when size is unknown
+                    pulse = (pulse + 1) % 20
+                    ping_pong = pulse / 19 if pulse < 10 else (19 - pulse) / 9
+                    self.after(0, self._set_overlay_progress,
+                               f"Downloading\n{mb:.1f} MB downloaded",
+                               ping_pong)
 
         self.after(0, self._update_overlay_text, "Extracting\u2026")
 
@@ -1451,6 +1534,8 @@ class App(tk.Tk):
         if remote_sha:
             settings = _load_settings()
             settings["repo_sha"] = remote_sha
+            settings["library_downloaded"] = True
+            settings["skip_library"] = False   # re-enable auto-update now that it's downloaded
             _save_settings(settings)
 
     def _set_overlay_progress(self, text: str, fraction: float):
@@ -2087,7 +2172,7 @@ class App(tk.Tk):
         self._lib_cache.close()
         self._yoursongs_cache.close()
         self._fav_db.close()
-        self._close_hotkey_window()
+        self._close_settings_window()
         self.destroy()
 
 

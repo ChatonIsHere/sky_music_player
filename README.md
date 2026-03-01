@@ -62,12 +62,12 @@ The GUI automatically downloads the community sheet collection on first launch. 
 
 User data is stored in `%LOCALAPPDATA%\SkyMusicPlayer\`:
 
-| Path            | Description                                   |
-| --------------- | --------------------------------------------- |
-| `settings.json` | Hotkeys and app configuration                 |
-| `_data/`        | SQLite databases (duration cache, favourites) |
-| `_sheets_repo/` | Downloaded song library                       |
-| `_imported/`    | User-imported song files                      |
+| Path            | Description                                    |
+| --------------- | ---------------------------------------------- |
+| `settings.json` | Hotkeys, library status, and app configuration |
+| `_data/`        | SQLite databases (duration cache, favourites)  |
+| `_sheets_repo/` | Downloaded song library                        |
+| `_imported/`    | User-imported song files                       |
 
 ## Credits
 
