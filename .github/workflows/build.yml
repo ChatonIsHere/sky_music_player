@@ -19,8 +19,8 @@ jobs:
 
             - name: Install dependencies
               run: |
-                  pip install -r requirements.txt
-                  pip install pyinstaller
+                  python -m pip install -r requirements.txt
+                  python -m pip install pyinstaller
 
             - name: Normalise icon (ensure multi-size Windows ICO)
               run: |
