@@ -15,9 +15,8 @@ Automatically play music in **Sky: Children of the Light** on PC by reading pre-
 ## Setup
 
 1. Install [Python 3.10+](https://www.python.org/downloads/).
-2. Install [Git](https://git-scm.com/downloads) (required for the built-in song library).
-3. Clone or download this repository.
-4. Install dependencies:
+2. Clone or download this repository.
+3. Install dependencies:
     ```
     pip install -r requirements.txt
     ```
@@ -48,7 +47,7 @@ py index.py
 
 ## Getting Songs
 
-The GUI automatically downloads the community sheet collection on first launch (via Git). You can also:
+The GUI automatically downloads the community sheet collection on first launch. You can also:
 
 - Click **Sync** in the Library tab to pull the latest sheets.
 - Click **Import** in the Your Songs tab to add files from your computer.
@@ -56,13 +55,18 @@ The GUI automatically downloads the community sheet collection on first launch (
 
 ## Project Structure
 
+| Path       | Description               |
+| ---------- | ------------------------- |
+| `gui.py`   | GUI application (Tkinter) |
+| `index.py` | CLI application           |
+
+User data is stored in `%LOCALAPPDATA%\SkyMusicPlayer\`:
+
 | Path            | Description                                   |
 | --------------- | --------------------------------------------- |
-| `gui.py`        | GUI application (Tkinter)                     |
-| `index.py`      | CLI application                               |
-| `hotkeys.json`  | User hotkey configuration                     |
+| `settings.json` | Hotkeys and app configuration                 |
 | `_data/`        | SQLite databases (duration cache, favourites) |
-| `_sheets_repo/` | Auto-cloned song library (Git-managed)        |
+| `_sheets_repo/` | Downloaded song library                       |
 | `_imported/`    | User-imported song files                      |
 
 ## Credits
