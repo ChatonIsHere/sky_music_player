@@ -27,7 +27,6 @@ jobs:
                   pyinstaller --onefile --windowed --name SkyMusicPlayer
                   --hidden-import pynput.keyboard._win32
                   --hidden-import pynput.mouse._win32
-                  --add-data "hotkeys.json;."
                   gui.py
 
             - name: Upload release
