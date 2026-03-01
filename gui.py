@@ -7,18 +7,20 @@ Reads song files (.txt / .json / .skysheet) directly from the library folder.
 All files are decoded as JSON at runtime — no conversion step needed.
 """
 
-import re as _re
 import tkinter as tk
 from tkinter import ttk
 import ctypes
+import io
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 import threading
 import sqlite3
+import urllib.request
+import urllib.error
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pynput.keyboard import Controller as KbController, Key, Listener, KeyCode
 import pygetwindow
@@ -56,7 +58,11 @@ _DATA_DIR     = os.path.join(_APP_DIR, "_data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 
 # Repository & imported songs
-_REPO_URL       = "https://github.com/Ai-Vonie/Sky1984-Sheets-Collection.git"
+_REPO_OWNER     = "Ai-Vonie"
+_REPO_NAME      = "Sky1984-Sheets-Collection"
+_REPO_BRANCH    = "master"
+_ZIP_URL        = f"https://github.com/{_REPO_OWNER}/{_REPO_NAME}/archive/refs/heads/{_REPO_BRANCH}.zip"
+_API_SHA_URL    = f"https://api.github.com/repos/{_REPO_OWNER}/{_REPO_NAME}/commits/{_REPO_BRANCH}"
 _REPO_DIR       = os.path.join(_APP_DIR, "_sheets_repo")
 _REPO_SONGS_DIR = os.path.join(_REPO_DIR, "Songs")
 _IMPORTED_DIR   = os.path.join(_APP_DIR, "_imported")
@@ -72,6 +78,7 @@ DEFAULT_SETTINGS = {
         "cursor_down":  "down",
         "add_to_queue": "f12",
     },
+    "setup_complete": False,
 }
 
 
@@ -803,29 +810,167 @@ class App(tk.Tk):
         self._hotkey_win = None
         self._sky_open = False
         self._sky_focused = False
+        self._first_run = False
+        self._listener = None
+        self._welcome_overlay = None
+        self._complete_overlay = None
 
         self._apply_theme()
         self._build_ui()
         self._resolve_hotkeys()
 
-        # ── kick off repo setup + scans ───────────────────────
-        self._pending_scans = 2  # library (via repo) + imported
-        self._show_scan_overlay("Setting up Library",
-                                "Checking repository\u2026")
-        threading.Thread(target=self._setup_repo, daemon=True).start()
+        # ── decide first-run vs returning ─────────────────────
+        settings = _load_settings()
+        if settings.get("setup_complete"):
+            self._start_auto_setup()
+        else:
+            self._show_welcome_screen()
 
-        # your songs — scan immediately
+    # ══════════════════════════════════════════════════════════
+    #  First-run / setup flow
+    # ══════════════════════════════════════════════════════════
+
+    def _show_welcome_screen(self):
+        """Show a full-window welcome overlay describing what setup will do."""
+        ov = tk.Frame(self, bg=COL_BG)
+        ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+        ov.lift()
+        self._welcome_overlay = ov
+
+        inner = tk.Frame(ov, bg=COL_BG)
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(inner, text="\u266b", font=("Segoe UI", 48),
+                 bg=COL_BG, fg=COL_ACCENT).pack()
+        tk.Label(inner, text="Welcome to Sky Music Player",
+                 font=("Segoe UI", 16, "bold"), bg=COL_BG,
+                 fg=COL_TEXT).pack(pady=(10, 16))
+
+        desc_text = (
+            "Before you start, the app needs to set up a few things.\n"
+            "Here\u2019s what will happen:\n"
+        )
+        tk.Label(inner, text=desc_text, font=FONT_SMALL, bg=COL_BG,
+                 fg=COL_TEXT_DIM, justify="center").pack()
+
+        steps_frame = tk.Frame(inner, bg=COL_BG)
+        steps_frame.pack(pady=(0, 8))
+
+        steps = [
+            ("\u2022  Create data folder",
+             f"Settings, caches, and songs will be stored in\n"
+             f"   {_APP_DIR}"),
+            ("\u2022  Download song library",
+             "Download the community sheet collection from GitHub\n"
+             "   (~60 MB download, may take a minute on first run)"),
+            ("\u2022  Scan song files",
+             "Index all songs so you can search and play them instantly"),
+            ("\u2022  Set up imported songs folder",
+             "Create a folder for your own imported song files"),
+        ]
+        for title, detail in steps:
+            tk.Label(steps_frame, text=title, font=FONT_BOLD, bg=COL_BG,
+                     fg=COL_ACCENT_LT, anchor="w", justify="left"
+                     ).pack(anchor="w", pady=(6, 0))
+            tk.Label(steps_frame, text=detail, font=FONT_TINY, bg=COL_BG,
+                     fg=COL_TEXT_DIM, anchor="w", justify="left"
+                     ).pack(anchor="w", padx=(16, 0))
+
+        tk.Label(inner, text="Requires: Internet connection",
+                 font=FONT_TINY, bg=COL_BG, fg=COL_TEXT_DIM
+                 ).pack(pady=(12, 16))
+
+        tk.Button(inner, text="Continue  \u2192", font=("Segoe UI", 11, "bold"),
+                  bg=COL_ACCENT, fg="#fff",
+                  activebackground=COL_ACCENT_LT, activeforeground="#fff",
+                  bd=0, relief="flat", padx=32, pady=8,
+                  command=self._on_welcome_continue).pack()
+
+    def _on_welcome_continue(self):
+        """User pressed Continue — tear down welcome, run first-time setup."""
+        if hasattr(self, "_welcome_overlay") and self._welcome_overlay:
+            self._welcome_overlay.destroy()
+            self._welcome_overlay = None
+        self._run_first_time_setup()
+
+    def _run_first_time_setup(self):
+        """Execute the full setup with overlay, then show completion screen."""
+        self._first_run = True
+        self._pending_scans = 2
+        self._show_scan_overlay("Setting up Library",
+                                "Preparing\u2026")
+        threading.Thread(target=self._first_time_setup_worker,
+                         daemon=True).start()
+
         os.makedirs(_IMPORTED_DIR, exist_ok=True)
         self._yoursongs_cache.rescan(_IMPORTED_DIR)
 
+    def _first_time_setup_worker(self):
+        """Worker thread: run repo setup then signal completion."""
+        self._setup_repo()
+
+    def _start_auto_setup(self):
+        """Returning user — silently update repo + scan, start app."""
+        self._first_run = False
+        self._pending_scans = 2
+        self._show_scan_overlay("Updating Library",
+                                "Checking for updates\u2026")
+        threading.Thread(target=self._setup_repo, daemon=True).start()
+
+        os.makedirs(_IMPORTED_DIR, exist_ok=True)
+        self._yoursongs_cache.rescan(_IMPORTED_DIR)
         self._refresh_fav_list()
 
-        # ── global hotkey listener ────────────────────────────
-        self._listener = Listener(on_press=self._on_global_key)
-        self._listener.daemon = True
-        self._listener.start()
+        # start listeners & ticks immediately
+        self._start_listeners()
 
-        # ── periodic ticks ────────────────────────────────────
+    def _show_setup_complete_screen(self):
+        """Show 'setup complete' overlay with a Start button."""
+        ov = tk.Frame(self, bg=COL_BG)
+        ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+        ov.lift()
+        self._complete_overlay = ov
+
+        inner = tk.Frame(ov, bg=COL_BG)
+        inner.place(relx=0.5, rely=0.45, anchor="center")
+
+        tk.Label(inner, text="\u2714", font=("Segoe UI", 48),
+                 bg=COL_BG, fg=COL_SUCCESS).pack()
+        tk.Label(inner, text="Setup Complete",
+                 font=("Segoe UI", 16, "bold"), bg=COL_BG,
+                 fg=COL_TEXT).pack(pady=(10, 8))
+        tk.Label(inner, text=(
+            f"Your data is stored in:\n{_APP_DIR}\n\n"
+            "The song library has been downloaded and indexed.\n"
+            "On future launches, updates will happen automatically."
+        ), font=FONT_SMALL, bg=COL_BG, fg=COL_TEXT_DIM,
+                 justify="center").pack(pady=(0, 20))
+
+        tk.Button(inner, text="\u25b6  Start Playing", font=("Segoe UI", 11, "bold"),
+                  bg=COL_ACCENT, fg="#fff",
+                  activebackground=COL_ACCENT_LT, activeforeground="#fff",
+                  bd=0, relief="flat", padx=32, pady=8,
+                  command=self._on_setup_complete_start).pack()
+
+    def _on_setup_complete_start(self):
+        """User pressed Start — save flag, tear down overlay, begin app."""
+        settings = _load_settings()
+        settings["setup_complete"] = True
+        _save_settings(settings)
+
+        if hasattr(self, "_complete_overlay") and self._complete_overlay:
+            self._complete_overlay.destroy()
+            self._complete_overlay = None
+
+        self._refresh_fav_list()
+        self._start_listeners()
+
+    def _start_listeners(self):
+        """Start the global hotkey listener and periodic ticks."""
+        if self._listener is None or not self._listener.is_alive():
+            self._listener = Listener(on_press=self._on_global_key)
+            self._listener.daemon = True
+            self._listener.start()
         self._tick_progress()
         self._tick_sky()
 
@@ -1174,45 +1319,32 @@ class App(tk.Tk):
                 btn.config(bg=COL_TAB_INACTIVE, fg=COL_BTN_FG)
 
     # ══════════════════════════════════════════════════════════
-    #  Repository management
+    #  Repository management  (ZIP download, no Git required)
     # ══════════════════════════════════════════════════════════
 
     def _setup_repo(self):
-        """Clone or update the sheets repo, then trigger library scan."""
-        # Check git is available
+        """Download or update the sheets repo via ZIP, then scan."""
         try:
-            subprocess.run(["git", "--version"],
-                           capture_output=True, check=True, timeout=10)
-        except (FileNotFoundError, subprocess.CalledProcessError,
-                subprocess.TimeoutExpired):
-            self._pending_scans = max(0, self._pending_scans - 1)
-            self.after(0, lambda: self._status_labels["library"].config(
-                text="Git not found \u2014 install Git to download the"
-                     " song library",
-                fg=COL_ERR))
-            self.after(0, self._hide_scan_overlay_if_done)
-            return
-
-        try:
-            if os.path.isdir(os.path.join(_REPO_DIR, ".git")):
-                # Existing clone — check for updates
+            if os.path.isdir(_REPO_SONGS_DIR):
+                # Existing download — check for updates
                 self.after(0, lambda: self._update_overlay_text(
                     "Checking for updates\u2026"))
                 if self._check_repo_update():
                     self.after(0, lambda: self._update_overlay_text(
                         "Updating library\u2026"))
-                    self._pull_repo()
+                    self._download_repo()
+                # else: already up to date, just scan
             else:
-                # First time — clone
+                # First time — download
                 self.after(0, lambda: self._update_overlay_text(
                     "Downloading song library\u2026\n"
                     "This may take a minute."))
-                self._clone_repo()
+                self._download_repo()
         except Exception as e:
             self._pending_scans = max(0, self._pending_scans - 1)
             err = str(e)
             self.after(0, lambda: self._status_labels["library"].config(
-                text=f"Repo error: {err}", fg=COL_ERR))
+                text=f"Download error: {err}", fg=COL_ERR))
             self.after(0, self._hide_scan_overlay_if_done)
             return
 
@@ -1224,64 +1356,102 @@ class App(tk.Tk):
         else:
             self._pending_scans = max(0, self._pending_scans - 1)
             self.after(0, lambda: self._status_labels["library"].config(
-                text="Songs folder not found in repository", fg=COL_ERR))
+                text="Songs folder not found in download", fg=COL_ERR))
             self.after(0, self._hide_scan_overlay_if_done)
 
-    # ── git progress streaming helper ─────────────────────
+    # ── ZIP download helpers ──────────────────────────────
 
-    _GIT_PCT_RE = _re.compile(r'(\d+)%')
-
-    def _run_git_progress(self, cmd: list[str], label: str, *,
-                          cwd: str | None = None, timeout: int = 600):
-        """Run a git command, streaming its stderr progress to the overlay."""
-        env = os.environ.copy()
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        proc = subprocess.Popen(
-            cmd, cwd=cwd, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, env=env,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
-        buf = ""
-        deadline = time.monotonic() + timeout
+    def _get_remote_sha(self) -> str | None:
+        """Fetch the latest commit SHA from the GitHub API."""
         try:
-            while True:
-                if time.monotonic() > deadline:
-                    proc.kill()
-                    raise subprocess.TimeoutExpired(cmd, timeout)
-                ch = proc.stderr.read(1)
-                if not ch:
-                    break
-                if ch in ('\r', '\n'):
-                    line = buf.strip()
-                    if line:
-                        self._parse_git_line(line, label)
-                    buf = ""
-                else:
-                    buf += ch
-            if buf.strip():
-                self._parse_git_line(buf.strip(), label)
-        finally:
-            proc.wait()
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(
-                proc.returncode, cmd,
-                output=proc.stdout.read() if proc.stdout else "",
-                stderr="")
+            req = urllib.request.Request(
+                _API_SHA_URL,
+                headers={"Accept": "application/vnd.github.sha",
+                         "User-Agent": "SkyMusicPlayer"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.read().decode().strip()
+        except Exception:
+            return None
 
-    def _parse_git_line(self, line: str, label: str):
-        """Extract percentage from a git progress line and update overlay."""
-        m = self._GIT_PCT_RE.search(line)
-        if m:
-            pct = int(m.group(1)) / 100.0
-            # Build a nice short description from the line
-            phase = line.split(':')[0].strip() if ':' in line else line
-            # Cap phase length
-            if len(phase) > 50:
-                phase = phase[:47] + '\u2026'
-            display = f"{label}\n{phase}: {int(pct * 100)}%"
-            self.after(0, self._set_overlay_progress, display, pct)
-        else:
-            self.after(0, self._update_overlay_text, f"{label}\n{line[:60]}")
+    def _check_repo_update(self) -> bool:
+        """Return True if the remote has newer commits than last download."""
+        remote_sha = self._get_remote_sha()
+        if not remote_sha:
+            return False
+        settings = _load_settings()
+        local_sha = settings.get("repo_sha", "")
+        return remote_sha != local_sha
+
+    def _download_repo(self):
+        """Download the repo ZIP and extract the Songs folder."""
+        # Fetch remote SHA first so we can store it
+        remote_sha = self._get_remote_sha()
+
+        # Download ZIP with progress
+        req = urllib.request.Request(
+            _ZIP_URL, headers={"User-Agent": "SkyMusicPlayer"})
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            buf = io.BytesIO()
+            downloaded = 0
+            chunk_size = 256 * 1024  # 256 KB
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                buf.write(chunk)
+                downloaded += len(chunk)
+                if total > 0:
+                    pct = downloaded / total
+                    mb = downloaded / (1024 * 1024)
+                    total_mb = total / (1024 * 1024)
+                    self.after(0, self._set_overlay_progress,
+                               f"Downloading\n{mb:.1f} / {total_mb:.1f} MB",
+                               pct)
+                else:
+                    mb = downloaded / (1024 * 1024)
+                    self.after(0, self._update_overlay_text,
+                               f"Downloading\n{mb:.1f} MB")
+
+        self.after(0, self._update_overlay_text, "Extracting\u2026")
+
+        # Extract Songs folder from ZIP
+        buf.seek(0)
+        tmp_dir = _REPO_DIR + "_tmp"
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        with zipfile.ZipFile(buf) as zf:
+            # ZIP root is typically "RepoName-branch/"
+            prefix = zf.namelist()[0].split("/")[0] + "/"
+            songs_prefix = prefix + "Songs/"
+            members = [m for m in zf.namelist()
+                       if m.startswith(songs_prefix) and not m.endswith("/")]
+            total_members = len(members)
+            for i, member in enumerate(members):
+                # Strip the ZIP root prefix so we get Songs/...
+                rel = member[len(prefix):]
+                dest = os.path.join(tmp_dir, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with zf.open(member) as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                if total_members > 0 and (i + 1) % 200 == 0:
+                    pct = (i + 1) / total_members
+                    self.after(0, self._set_overlay_progress,
+                               f"Extracting\n{i + 1:,} / {total_members:,} files",
+                               pct)
+
+        # Swap into place atomically
+        if os.path.isdir(_REPO_DIR):
+            shutil.rmtree(_REPO_DIR, ignore_errors=True)
+        os.rename(tmp_dir, _REPO_DIR)
+
+        # Save the SHA so we can check for updates next time
+        if remote_sha:
+            settings = _load_settings()
+            settings["repo_sha"] = remote_sha
+            _save_settings(settings)
 
     def _set_overlay_progress(self, text: str, fraction: float):
         """Update both the overlay detail text and progress bar."""
@@ -1291,52 +1461,6 @@ class App(tk.Tk):
         self._scan_ov_bar.place(relx=0, rely=0, relheight=1,
                                 relwidth=max(0.0, min(fraction, 1.0)))
         self._scan_ov_pct.config(text=f"{int(fraction * 100)} %")
-
-    def _clone_repo(self):
-        """Shallow sparse clone of the Songs folder only."""
-        try:
-            self._run_git_progress([
-                "git", "clone", "--depth", "1", "--progress",
-                "--filter=blob:none", "--sparse",
-                _REPO_URL, _REPO_DIR,
-            ], "Cloning repository")
-            self.after(0, self._update_overlay_text,
-                       "Configuring sparse checkout\u2026")
-            self._run_git_progress([
-                "git", "sparse-checkout", "set", "Songs",
-            ], "Downloading songs", cwd=_REPO_DIR)
-        except Exception:
-            # Clean up partial clone
-            if os.path.isdir(_REPO_DIR):
-                shutil.rmtree(_REPO_DIR, ignore_errors=True)
-            raise
-
-    def _check_repo_update(self) -> bool:
-        """Return True if the remote has newer commits than local HEAD."""
-        try:
-            r = subprocess.run(
-                ["git", "ls-remote", "origin", "refs/heads/master"],
-                cwd=_REPO_DIR, capture_output=True, text=True, timeout=15)
-            if r.returncode != 0 or not r.stdout.strip():
-                return False
-            remote_sha = r.stdout.split()[0]
-            r2 = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=_REPO_DIR, capture_output=True, text=True)
-            local_sha = r2.stdout.strip()
-            return remote_sha != local_sha
-        except Exception:
-            return False
-
-    def _pull_repo(self):
-        """Fetch and reset to latest remote commit."""
-        self._run_git_progress(
-            ["git", "fetch", "--depth", "1", "--progress",
-             "origin", "master"],
-            "Fetching updates", cwd=_REPO_DIR)
-        subprocess.run(
-            ["git", "reset", "--hard", "origin/master"],
-            cwd=_REPO_DIR, capture_output=True, text=True, timeout=60)
 
     def _sync_library(self):
         """Check for repo updates then rescan (single Sync button)."""
@@ -1348,21 +1472,18 @@ class App(tk.Tk):
 
     def _sync_library_worker(self):
         try:
-            updated = False
-            if os.path.isdir(os.path.join(_REPO_DIR, ".git")):
+            if os.path.isdir(_REPO_SONGS_DIR):
                 if self._check_repo_update():
                     self.after(0, lambda: self._update_overlay_text(
                         "Downloading updates\u2026"))
-                    self._pull_repo()
-                    updated = True
+                    self._download_repo()
                 else:
                     self.after(0, lambda: self._update_overlay_text(
                         "Already up to date \u2014 rescanning\u2026"))
             else:
                 self.after(0, lambda: self._update_overlay_text(
                     "Downloading song library\u2026"))
-                self._clone_repo()
-                updated = True
+                self._download_repo()
 
             if os.path.isdir(_REPO_SONGS_DIR):
                 self._lib_cache.rescan(_REPO_SONGS_DIR)
@@ -1424,11 +1545,19 @@ class App(tk.Tk):
         self._pending_scans = max(0, self._pending_scans - 1)
         self._hide_scan_overlay_if_done()
         self._apply_tab_search("library")
+        self._maybe_show_setup_complete()
 
     def _on_yoursongs_ready(self):
         self._pending_scans = max(0, self._pending_scans - 1)
         self._hide_scan_overlay_if_done()
         self._apply_tab_search("yoursongs")
+        self._maybe_show_setup_complete()
+
+    def _maybe_show_setup_complete(self):
+        """After all scans finish on first run, show the completion screen."""
+        if getattr(self, '_first_run', False) and self._pending_scans <= 0:
+            self._first_run = False  # only once
+            self.after(0, self._show_setup_complete_screen)
 
     # ── scan overlay ─────────────────────────────────────────
 
@@ -1953,7 +2082,8 @@ class App(tk.Tk):
 
     def _on_close(self):
         self.engine.stop()
-        self._listener.stop()
+        if self._listener is not None and self._listener.is_alive():
+            self._listener.stop()
         self._lib_cache.close()
         self._yoursongs_cache.close()
         self._fav_db.close()
